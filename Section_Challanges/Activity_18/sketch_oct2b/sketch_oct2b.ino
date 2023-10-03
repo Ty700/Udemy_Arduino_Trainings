@@ -71,6 +71,7 @@ void setupLCD(){
   lcd.setCursor(0, 0);
 }
 
+//Main setup
 void setup() {
   Serial.begin(115200);
   IrReceiver.begin(IR_PIN);
@@ -79,18 +80,23 @@ void setup() {
   setupLEDS();
 }
 
+//=========SETUP FINISHED=========\\
+
+//Turns on all LEDS
 void turnOnLEDS(){
   for(int i = 0; i < 3; i++){
     digitalWrite(LEDS[i], HIGH);
   }
 }
 
+//Turns off all LEDS
 void turnOffLEDS(){
   for(int i = 0; i < sizeofLEDS; i++){
     digitalWrite(LEDS[i], LOW);
   }
 }
 
+//Writes to LCD given a version
 void writeToLCD(int version){
   lcd.print("Function:");
   
@@ -131,7 +137,7 @@ void writeToLCD(int version){
   }
 }
 
-
+//Toggles LED on a given pin
 void toggleLED(int pin){
   if(pin == RED_PIN){
     redState = ~redState;
@@ -144,6 +150,7 @@ void toggleLED(int pin){
     digitalWrite(BLUE_PIN, blueState);
   }
 }
+
 
 void loop() {
   unsigned long timeNow = millis();
