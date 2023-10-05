@@ -10,28 +10,33 @@
 *   - Print distance and warning message to LCD Screen - Completed
 *   - Setup IR Remote Controller and map buttons - Completed
 *   - Setup program unlocking via the "EQ" button on the remote - Completed
-*   - Change and save (EEPROM) the distance unit - Omiited. REASON: Want my program to only work with cm & ! inches.
-*   - Switch between LCD Screens and Reset Settings
-*   - Will update the rest after I finish the previous goal
+*   - Change and save (EEPROM) the distance unit - Completed
+*   - Switch between LCD Screens and Reset Settings - Completed
+*   - Print Luminosity and adjust the lighting from the photoresistor - Completed
+*   - **FINAL PROJECT COMPLETED**
 *
 *
 */
 //LIBS
 #include <LiquidCrystal_I2C.h>
 #include <IRremote.h>
+#include <EEPROM.h>
 
 //PIN OUT
 #define ECHO_PIN 3
 #define TRIGGER_PIN 4
 #define RED_PIN 5
 #define YELLOW_PIN 6
-#define GREEN_PIN 7
+#define GREEN_PIN 10
 #define RESET_PIN 8
 #define IR_PIN 9
+#define PHOTO_RES_PIN A0
 
 //THRESHOLDS
-#define LOCK_UP_THRESHOLD 10 //cm
-#define MAX_DISTANCE_LIMIT 400 //cm
+#define CM_LOCK_UP_THRESHOLD 10 //cm
+#define IN_LOCK_UP_THRESHOLD 4 //inches
+#define MAX_CM_DISTANCE_LIMIT 400 //cm
+#define MAX_IN_DISTANCE_LIMIT 157 //inches
 
 //LCD PARAMETERS
 #define ADDR 0x27
@@ -59,6 +64,9 @@
 #define IR_BUTTON_8 82
 #define IR_BUTTON_9 74
 
+//IR REMOTE INPUT VAR
+int buttonCMD;
+
 //OBJ CREATION(S)
 LiquidCrystal_I2C lcd(ADDR, ROW, COL);
 
@@ -77,6 +85,14 @@ unsigned long lastBlinkTime = millis();
 #define LOCK_UP_DELAY 500 //ms 
 unsigned long lastLockupBlinkTime = millis();
 
+//IR TIMINGS
+#define IR_DELAY 500 //ms
+unsigned long lastIRTime = millis();
+
+//Lumonisity Timings
+#define LUMON_DELAY 100
+unsigned long lastPhotoResReadTime = millis();
+
 //ECHO INTERRUPT VARS
 volatile bool newResponse = false;
 volatile unsigned long startTime;
@@ -87,8 +103,31 @@ int RED_STATE = LOW;
 int YELLOW_STATE = LOW;
 int GREEN_STATE = LOW;
 
+//LCD MODES
+#define LCD_MODE_DISTANCE 1
+#define LCD_MODE_SETTINGS 2
+#define LCD_MODE_LUMONS 3
+int LCD_MODE = LCD_MODE_DISTANCE;
+
+//UNIT MODES
+#define CM_MODE 0
+#define IN_MODE 1
+
+//EEPROM WRITE ADDR
+#define UNIT_ADDR 50
+
+//GLOBAL UNIT VAR
+int UNIT = EEPROM.read(UNIT_ADDR);
+
+//GLOBAL BRIGHTNESS VALUE
+byte brightness;
+
+//GLOBAL ULTRASONIC SENSOR DISTANCE VARIABLE
+int distance;
+
 //FOR COMPLIMENTARY FILTER
-int previousDistance = 400;
+int previousCMDistance = MAX_CM_DISTANCE_LIMIT;
+int previousINDistance = MAX_IN_DISTANCE_LIMIT;
 
 //PROGRAM STATE
 bool PROGRAM_LOCKED = false;
@@ -115,11 +154,11 @@ void setup() {
   //PINMODES
   pinMode(TRIGGER_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-
   pinMode(RED_PIN, OUTPUT);
   pinMode(YELLOW_PIN, OUTPUT);
   pinMode(GREEN_PIN, OUTPUT);
 
+  //INTERRUPTS
   attachInterrupt(digitalPinToInterrupt(ECHO_PIN),
                   echoInterrupt,
                   CHANGE
@@ -167,20 +206,38 @@ void newTrigger(){
 //CALCULATES THE DISTANCE
 //endTime & startTime are global vars changed via ECHO INTERRUPT
 int calculateDistance(){
-  int distance = (endTime - startTime) / 58;
+  int distance;
+  if(UNIT == CM_MODE){
+    distance = (endTime - startTime) / 58;
 
-  //Sensor can only read up to 400cm
-  //If it gets a wild reading over the limit it will set the distance to the max limit
-  if(distance > MAX_DISTANCE_LIMIT){
-    distance = MAX_DISTANCE_LIMIT;
+    //Sensor can only read up to 400cm
+    //If it gets a wild reading over the limit it will set the distance to the max limit
+    if(distance > MAX_CM_DISTANCE_LIMIT){
+      distance = MAX_CM_DISTANCE_LIMIT;
+    }
+
+    //Complimentary Filter
+    distance = previousCMDistance * 0.6 + distance * 0.4;
+
+    previousCMDistance = distance;
+
+    return distance;
+  } else {
+    distance = (endTime - startTime) / 148;
+
+    //Sensor can only read up to 157in
+    //If it gets a wild reading over the limit it will set the distance to the max limit
+    if(distance > MAX_IN_DISTANCE_LIMIT){
+      distance = MAX_IN_DISTANCE_LIMIT;
+    }
+
+    //Complimentary Filter
+    distance = previousINDistance * 0.6 + distance * 0.4;
+
+    previousINDistance = distance;
+
+    return distance;
   }
-
-  //Complimentary Filter
-  distance = previousDistance * 0.6 + distance * 0.4;
-
-  previousDistance = distance;
-
-  return distance;
 }
 
 //CHECKS IF PRINT_DELAY TIMING HAS PASSED TO BE ABLE TO PRINT TO LCD
@@ -195,7 +252,7 @@ bool checkToPrintToLCD(){
 }
 
 //PRINTS DISTANCE ONTO LCD
-void printToLCD(const int distance){
+void printDistanceToLCD(const int distance){
   lcd.setCursor(0, 0);
   lcd.print("Distance: ");
 
@@ -207,39 +264,80 @@ void printToLCD(const int distance){
 
   lcd.print(distance);
 
-  if((distance <= 99) && (distance > 10)){
-    if(distance <= 50){
+  if(UNIT == CM_MODE){
+    if((distance <= 99) && (distance > 10)){
+      if(distance <= 50){
+        lcd.setCursor(0,1);
+        lcd.print("!!! WARNING !!!");
+      }
+      lcd.setCursor(12, 0);
+      lcd.print("cm");
+    } else if (distance >= 100){
       lcd.setCursor(0,1);
-      lcd.print("!!! WARNING !!!");
-    }
-    lcd.setCursor(12, 0);
-    lcd.print("cm");
-  } else if (distance >= 100){
-    lcd.setCursor(0,1);
-    //Clears !!! WARNING !!! if any
-    for(int i = 0; i < 16; i++){
-      lcd.print(" ");
-    }
+      //Clears !!! WARNING !!! if any
+      for(int i = 0; i < 17; i++){
+        lcd.print(" ");
+      }
 
-    lcd.setCursor(13,0);
-    lcd.print("cm");
+      lcd.setCursor(13,0);
+      lcd.print("cm");
+    } 
+  } else {
+      if((distance <= 99) && (distance > IN_LOCK_UP_THRESHOLD)){
+        if(distance <= 15){
+          lcd.setCursor(0,1);
+          lcd.print("!!! WARNING !!!");
+        }
+
+        lcd.setCursor(12, 0);
+        lcd.print("in");
+      } else if (distance >= 100){
+        lcd.setCursor(0,1);
+        //Clears !!! WARNING !!! if any
+        for(int i = 0; i < 17; i++){
+          lcd.print(" ");
+        }
+
+        lcd.setCursor(13,0);
+        lcd.print("in");
+      }
+    }
   }
-}
 
+//Changes how fast yellow blinks
+//& detects if obj is too close it will lock program
 void updateWarningLED(int distance){
   unsigned long timeNow = millis();
 
-  if(distance <= LOCK_UP_THRESHOLD){
-    if((timeNow - lastLockupBlinkTime) > LOCK_UP_DELAY){
-      lastLockupBlinkTime += LOCK_UP_DELAY;
-      YELLOW_STATE = ~YELLOW_STATE;
-      RED_STATE = YELLOW_STATE;
-      digitalWrite(YELLOW_PIN, YELLOW_STATE);
-      digitalWrite(RED_PIN, RED_STATE);
+  if(UNIT == CM_MODE){
+    if(distance <= CM_LOCK_UP_THRESHOLD){
+      if((timeNow - lastLockupBlinkTime) > LOCK_UP_DELAY){
+        lastLockupBlinkTime += LOCK_UP_DELAY;
+        YELLOW_STATE = ~YELLOW_STATE;
+        RED_STATE = YELLOW_STATE;
+        digitalWrite(YELLOW_PIN, YELLOW_STATE);
+        digitalWrite(RED_PIN, RED_STATE);
 
-      lockProgram();
+        lockProgram();
+      }
+      return;
+    } else {
+      
     }
-    return;
+  } else {
+    if(distance <= IN_LOCK_UP_THRESHOLD){
+      if((timeNow - lastLockupBlinkTime) > LOCK_UP_DELAY){
+        lastLockupBlinkTime += LOCK_UP_DELAY;
+        YELLOW_STATE = ~YELLOW_STATE;
+        RED_STATE = YELLOW_STATE;
+        digitalWrite(YELLOW_PIN, YELLOW_STATE);
+        digitalWrite(RED_PIN, RED_STATE);
+
+        lockProgram();
+      }
+      return;
+    }
+
   }
 
   /*Simple blink delay. 
@@ -259,25 +357,156 @@ void updateWarningLED(int distance){
   }
 }
 
+//Locks the program
 void lockProgram(){
   if(!PROGRAM_LOCKED){
     PROGRAM_LOCKED = true;
   }
 }
 
+//Unlocks program
 void unlockProgram(){
   if(PROGRAM_LOCKED){
     PROGRAM_LOCKED = false;
   }
 }
 
+//LCD Screen while program is locked
 void printLockUpWarning(){
   lcd.clear();
   lcd.setCursor(1, 0);
   lcd.print("!!!WARNING!!!");
+  lcd.setCursor(0, 1);
+  lcd.print("OBJECT DETECTED");
+  delay(1000);
+  lcd.clear();
+  lcd.setCursor(3, 0);
+  lcd.print("PRESS 'EQ'");
   lcd.setCursor(1, 1);
-  lcd.print("EQ or Button to Reset");
- 
+  lcd.print("OR PUSH BUTTON");
+  delay(1000);
+}
+
+//Makes sure LCD_MODE is a valid number
+void validateLCDMode(){
+  if(LCD_MODE < LCD_MODE_DISTANCE){
+      LCD_MODE = LCD_MODE_LUMONS;
+    }
+
+  if(LCD_MODE > LCD_MODE_LUMONS){
+    LCD_MODE = LCD_MODE_DISTANCE;
+  }
+}
+
+//Updates Unit mode
+void updateUnitMode(){
+  if(buttonCMD == IR_BUTTON_MODE){
+    if(UNIT == CM_MODE){
+      UNIT = IN_MODE;
+    } else {
+      UNIT = CM_MODE;
+    }
+    EEPROM.write(UNIT_ADDR, UNIT);
+  }
+}
+
+//Will display a different screen depending on LCD_MODE
+void toggleLCDScreen(int LCD_MODE){
+  switch(LCD_MODE){
+    case (LCD_MODE_DISTANCE):
+      //Display Distance
+      printDistanceToLCD(distance);
+      break;
+    case (LCD_MODE_SETTINGS):
+      printSettings();
+      break;
+    case (LCD_MODE_LUMONS):
+      lcd.clear();
+      printLuminosity();
+      break;
+  }
+}
+
+//Checks if user pushed a button on IR remote
+bool checkForNewIR(){
+  unsigned long timeNow = millis();
+  if((timeNow - lastIRTime) > IR_DELAY){
+    lastIRTime += IR_DELAY;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+//Resets the program to default settings
+void resetSettings(){
+  if(LCD_MODE == LCD_MODE_SETTINGS){
+    UNIT = CM_MODE;
+    EEPROM.write(UNIT_ADDR, UNIT);
+    lcd.clear();
+    lcd.print("SETTINGS CLEARED");
+    delay(1000);
+  }
+}
+
+//Completes the action for the button the user pushed on the IR Remote
+void completeIRButtonAction(const int &command){
+  switch(command){
+    case (0):
+      //Do nothing
+      break;
+    
+    case (IR_BUTTON_MODE):
+      updateUnitMode();
+      break;
+
+    case (IR_BUTTON_FORWARD):
+      LCD_MODE += 1;
+      validateLCDMode();
+      break;
+    
+    case(IR_BUTTON_REWIND):
+      LCD_MODE -= 1;
+      validateLCDMode();
+      break;
+    case(IR_BUTTON_PWR):
+      resetSettings();
+      break;
+    default:
+      //Do nothing
+      break;
+  }
+}
+
+//updates the value for green's luminosity
+void changeGreenBrightness(){
+  unsigned long timeNow = millis();
+  if((timeNow - lastPhotoResReadTime) > LUMON_DELAY){
+    lastPhotoResReadTime += LUMON_DELAY;
+    int luminosity = analogRead(PHOTO_RES_PIN);
+    setGreenBrightness(luminosity);
+  }
+}
+
+//sets green led brightness to result from previous function
+void setGreenBrightness(const int &luminosity){
+  brightness = 255 - (luminosity / 4);
+  analogWrite(GREEN_PIN, brightness);
+}
+
+//print screen for luminonsity LCD_MODE
+void printLuminosity(){
+  lcd.print("Luminosity: ");
+  lcd.print(brightness);
+}
+
+//print screen for settings LCD_MODE
+void printSettings(){
+  lcd.clear();
+  lcd.setCursor(2, 0);
+  lcd.print("PRESS POWER");
+  lcd.setCursor(0, 1);
+  lcd.print("TO RESET SETTING"); 
 }
 
 //MAIN
@@ -286,23 +515,34 @@ void loop() {
     newTrigger();
   }
 
-  int buttonCMD;
-  if(IrReceiver.decode()){
-    IrReceiver.resume();
-
-    buttonCMD = IrReceiver.decodedIRData.command;
+  //Updates value for buttonCMD depending if new IR input was detected
+  if(checkForNewIR()){
+    //Updates buttonCMD with new input from remote
+    if(IrReceiver.decode()){
+      IrReceiver.resume();
+      buttonCMD = IrReceiver.decodedIRData.command;
+      completeIRButtonAction(buttonCMD);
+    }
   }
 
+  //if new echo response
   if(newResponse){
-    //Reseting flag
+    //Reseting flag for detecting a new echo
     newResponse = false;
 
+    //Checks if program is locked
     if(PROGRAM_LOCKED){
-      updateWarningLED(LOCK_UP_THRESHOLD);
+      if(UNIT = CM_MODE){
+        updateWarningLED(CM_LOCK_UP_THRESHOLD);
+      } else {
+        updateWarningLED(IN_LOCK_UP_THRESHOLD);
+      }
+
       if(checkToPrintToLCD()){
         printLockUpWarning();
       }
 
+      //If user pushes the button or press EQ on the remote, it will unlock program
       if(digitalRead(RESET_PIN) == HIGH || buttonCMD == IR_BUTTON_EQ){
         unlockProgram();
         lcd.clear();
@@ -310,15 +550,22 @@ void loop() {
         delay(1000);
       }
 
+    //If Program isn't locked...
     } else {
-      int distance = calculateDistance();
+      //Updates which unit to display
+      distance = calculateDistance();
 
       updateWarningLED(distance);
-      
+
       if(checkToPrintToLCD()){
-        printToLCD(distance);
+        updateUnitMode();
+        toggleLCDScreen(LCD_MODE);
       } 
-    }    
+    }
   }
 
+  changeGreenBrightness();
+
+  //RESETING FLAG
+  buttonCMD = 0;
 }
