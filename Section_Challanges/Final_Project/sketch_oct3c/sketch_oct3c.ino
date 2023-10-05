@@ -8,13 +8,17 @@
 *   - Unlock the application when the user presses the push button - Completed
 *   - LCD Setup and Welcome message - Completed
 *   - Print distance and warning message to LCD Screen - Completed
-*   - Setup IR Remote Controller and map buttons
+*   - Setup IR Remote Controller and map buttons - Completed
+*   - Setup program unlocking via the "EQ" button on the remote - Completed
+*   - Change and save (EEPROM) the distance unit - Omiited. REASON: Want my program to only work with cm & ! inches.
+*   - Switch between LCD Screens and Reset Settings
 *   - Will update the rest after I finish the previous goal
 *
 *
 */
 //LIBS
 #include <LiquidCrystal_I2C.h>
+#include <IRremote.h>
 
 //PIN OUT
 #define ECHO_PIN 3
@@ -23,6 +27,7 @@
 #define YELLOW_PIN 6
 #define GREEN_PIN 7
 #define RESET_PIN 8
+#define IR_PIN 9
 
 //THRESHOLDS
 #define LOCK_UP_THRESHOLD 10 //cm
@@ -32,6 +37,27 @@
 #define ADDR 0x27
 #define ROW 16
 #define COL 2
+
+//BUTTON MAPPING
+#define IR_BUTTON_PWR 69
+#define IR_BUTTON_MODE 70
+#define IR_BUTTON_MUTE 71
+#define IR_BUTTON_PLAY 68
+#define IR_BUTTON_REWIND 64
+#define IR_BUTTON_FORWARD 67
+#define IR_BUTTON_EQ 7 
+#define IR_BUTTON_VOL_DOWN 21
+#define IR_BUTTON_VOL_UP 9
+#define IR_BUTTON_0 22
+#define IR_BUTTON_1 12
+#define IR_BUTTON_2 24
+#define IR_BUTTON_3 94
+#define IR_BUTTON_4 8
+#define IR_BUTTON_5 28
+#define IR_BUTTON_6 90
+#define IR_BUTTON_7 66
+#define IR_BUTTON_8 82
+#define IR_BUTTON_9 74
 
 //OBJ CREATION(S)
 LiquidCrystal_I2C lcd(ADDR, ROW, COL);
@@ -77,9 +103,15 @@ void setupLCD(){
 
 //Main setup
 void setup() {
+  //LCD Setup
   setupLCD();
+  
+  //Serial for debug
   Serial.begin(115200);
   
+  //IR Receiver setup
+  IrReceiver.begin(IR_PIN);
+
   //PINMODES
   pinMode(TRIGGER_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
@@ -92,6 +124,7 @@ void setup() {
                   echoInterrupt,
                   CHANGE
                 );
+
   //Buffer between setup and running
   delay(1000);
   lcd.clear();
@@ -174,13 +207,20 @@ void printToLCD(const int distance){
 
   lcd.print(distance);
 
-  if((distance <= 9) && (distance >= 0)){
-    lcd.setCursor(11,0);
-    lcd.print("cm");
-  } else if((distance <= 99) && (distance >= 10)){
+  if((distance <= 99) && (distance > 10)){
+    if(distance <= 50){
+      lcd.setCursor(0,1);
+      lcd.print("!!! WARNING !!!");
+    }
     lcd.setCursor(12, 0);
     lcd.print("cm");
   } else if (distance >= 100){
+    lcd.setCursor(0,1);
+    //Clears !!! WARNING !!! if any
+    for(int i = 0; i < 16; i++){
+      lcd.print(" ");
+    }
+
     lcd.setCursor(13,0);
     lcd.print("cm");
   }
@@ -236,7 +276,7 @@ void printLockUpWarning(){
   lcd.setCursor(1, 0);
   lcd.print("!!!WARNING!!!");
   lcd.setCursor(1, 1);
-  lcd.print("REMOVE OBJECT");
+  lcd.print("EQ or Button to Reset");
  
 }
 
@@ -244,6 +284,13 @@ void printLockUpWarning(){
 void loop() {
   if(checkToTrigger()){
     newTrigger();
+  }
+
+  int buttonCMD;
+  if(IrReceiver.decode()){
+    IrReceiver.resume();
+
+    buttonCMD = IrReceiver.decodedIRData.command;
   }
 
   if(newResponse){
@@ -256,9 +303,11 @@ void loop() {
         printLockUpWarning();
       }
 
-      if(digitalRead(RESET_PIN) == HIGH){
+      if(digitalRead(RESET_PIN) == HIGH || buttonCMD == IR_BUTTON_EQ){
         unlockProgram();
         lcd.clear();
+        //Allows user to get hand out of the way to avoid dupe lock ups
+        delay(1000);
       }
 
     } else {
