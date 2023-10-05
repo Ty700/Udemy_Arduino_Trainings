@@ -15,6 +15,12 @@
 #define ECHO_PIN 3
 #define TRIGGER_PIN 4
 
+#define RED_PIN 5
+#define YELLOW_PIN 6
+#define GREEN_PIN 7
+
+#define MAX_DISTANCE_LIMIT 400 //cm
+
 //LCD PARAMETERS
 #define ADDR 0x27
 #define ROW 16
@@ -25,18 +31,29 @@ LiquidCrystal_I2C lcd(ADDR, ROW, COL);
 
 
 //TIMINGS
-#define TRIGGER_DELAY 60
+#define TRIGGER_DELAY 100 //ms
 unsigned long lastTriggerTime = millis();
 
-#define PRINT_DELAY 500
+#define PRINT_DELAY 500 //ms
 unsigned long lastPrintTime = millis();
+
+unsigned long lastBlinkTime = millis();
+
+#define LOCK_UP_DELAY 500 //ms 
+unsigned lastLockupBlinkTime = millis();
 
 //ECHO INTERRUPT VARS
 volatile bool newResponse = false;
 volatile unsigned long startTime;
 volatile unsigned long endTime;
 
+//LED STATES
+int RED_STATE = LOW;
+int YELLOW_STATE = LOW;
+int GREEN_STATE = LOW;
 
+//FOR COMPLIMENTARY FILTER
+int previousDistance = 400;
 
 //SETUPS LCD
 void setupLCD(){
@@ -52,6 +69,10 @@ void setup() {
   //PINMODES
   pinMode(TRIGGER_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(YELLOW_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
 
   attachInterrupt(digitalPinToInterrupt(ECHO_PIN),
                   echoInterrupt,
@@ -97,6 +118,18 @@ void newTrigger(){
 //endTime & startTime are global vars changed via ECHO INTERRUPT
 int calculateDistance(){
   int distance = (endTime - startTime) / 58;
+
+  //Sensor can only read up to 400cm
+  //If it gets a wild reading over the limit it will set the distance to the max limit
+  if(distance > MAX_DISTANCE_LIMIT){
+    distance = MAX_DISTANCE_LIMIT;
+  }
+
+  //Complimentary Filter
+  distance = previousDistance * 0.6 + distance * 0.4;
+
+  previousDistance = distance;
+
   return distance;
 }
 
@@ -136,6 +169,38 @@ void printToLCD(const int distance){
   }
 }
 
+void updateWarningLED(int distance){
+  unsigned long timeNow = millis();
+
+  if(distance <= 10){
+    if((timeNow - lastLockupBlinkTime) > LOCK_UP_DELAY){
+      lastLockupBlinkTime += LOCK_UP_DELAY;
+      YELLOW_STATE = ~YELLOW_STATE;
+      RED_STATE = YELLOW_STATE;
+      digitalWrite(YELLOW_PIN, YELLOW_STATE);
+      digitalWrite(RED_PIN, RED_STATE);
+    }
+    return;
+  }
+
+  /*Simple blink delay. 
+    - 100cm distance = 500 ms blink delay
+    - 50cm distance = 250ms blink delay.
+
+    Objective is as the obj gets closer the blink delay gets shorter.
+    distance * 5 results in a good blink delay imo
+  */
+  int newBlinkDelay = distance * 5;
+
+  if((timeNow - lastBlinkTime) > newBlinkDelay){
+    lastBlinkTime += newBlinkDelay;
+    YELLOW_STATE = ~YELLOW_STATE;
+    digitalWrite(YELLOW_PIN, YELLOW_STATE);
+    digitalWrite(RED_PIN, LOW);
+  }
+}
+
+
 //MAIN
 void loop() {
   if(checkToTrigger()){
@@ -144,11 +209,11 @@ void loop() {
 
   if(newResponse){
     int distance = calculateDistance();
+    updateWarningLED(distance);
     newResponse = false;
-
     if(checkToPrintToLCD()){
       printToLCD(distance);
-    }
+    }    
   }
 
 }
