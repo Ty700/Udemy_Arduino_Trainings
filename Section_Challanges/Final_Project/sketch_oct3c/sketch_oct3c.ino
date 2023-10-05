@@ -3,7 +3,12 @@
 * 
 * Goals:
 *   - Using a ultrasonic sensor, capture and display the distance to an object - Completed
-*   - Changed LED Blink Rate depending on the distance
+*   - Changed LED Blink Rate depending on the distance - Completed
+*   - Lock the Application when an obstacle is too close. - Completed
+*   - Unlock the application when the user presses the push button - Completed
+*   - LCD Setup and Welcome message - Completed
+*   - Print distance and warning message to LCD Screen - Completed
+*   - Setup IR Remote Controller and map buttons
 *   - Will update the rest after I finish the previous goal
 *
 *
@@ -14,11 +19,13 @@
 //PIN OUT
 #define ECHO_PIN 3
 #define TRIGGER_PIN 4
-
 #define RED_PIN 5
 #define YELLOW_PIN 6
 #define GREEN_PIN 7
+#define RESET_PIN 8
 
+//THRESHOLDS
+#define LOCK_UP_THRESHOLD 10 //cm
 #define MAX_DISTANCE_LIMIT 400 //cm
 
 //LCD PARAMETERS
@@ -29,18 +36,20 @@
 //OBJ CREATION(S)
 LiquidCrystal_I2C lcd(ADDR, ROW, COL);
 
-
-//TIMINGS
+//TRIGGER TIMINGS
 #define TRIGGER_DELAY 100 //ms
 unsigned long lastTriggerTime = millis();
 
+//PRINT DELAY TIMINGS
 #define PRINT_DELAY 500 //ms
 unsigned long lastPrintTime = millis();
 
+//BLINK TIMINGS
 unsigned long lastBlinkTime = millis();
 
+//PROGRAM LOCK TIMINGS
 #define LOCK_UP_DELAY 500 //ms 
-unsigned lastLockupBlinkTime = millis();
+unsigned long lastLockupBlinkTime = millis();
 
 //ECHO INTERRUPT VARS
 volatile bool newResponse = false;
@@ -55,13 +64,18 @@ int GREEN_STATE = LOW;
 //FOR COMPLIMENTARY FILTER
 int previousDistance = 400;
 
+//PROGRAM STATE
+bool PROGRAM_LOCKED = false;
+
 //SETUPS LCD
 void setupLCD(){
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0,0);
+  lcd.print("Initializing...");
 }
 
+//Main setup
 void setup() {
   setupLCD();
   Serial.begin(115200);
@@ -78,6 +92,9 @@ void setup() {
                   echoInterrupt,
                   CHANGE
                 );
+  //Buffer between setup and running
+  delay(1000);
+  lcd.clear();
 }
 
 //================DONE WITH SETUP================\\
@@ -172,13 +189,15 @@ void printToLCD(const int distance){
 void updateWarningLED(int distance){
   unsigned long timeNow = millis();
 
-  if(distance <= 10){
+  if(distance <= LOCK_UP_THRESHOLD){
     if((timeNow - lastLockupBlinkTime) > LOCK_UP_DELAY){
       lastLockupBlinkTime += LOCK_UP_DELAY;
       YELLOW_STATE = ~YELLOW_STATE;
       RED_STATE = YELLOW_STATE;
       digitalWrite(YELLOW_PIN, YELLOW_STATE);
       digitalWrite(RED_PIN, RED_STATE);
+
+      lockProgram();
     }
     return;
   }
@@ -200,6 +219,26 @@ void updateWarningLED(int distance){
   }
 }
 
+void lockProgram(){
+  if(!PROGRAM_LOCKED){
+    PROGRAM_LOCKED = true;
+  }
+}
+
+void unlockProgram(){
+  if(PROGRAM_LOCKED){
+    PROGRAM_LOCKED = false;
+  }
+}
+
+void printLockUpWarning(){
+  lcd.clear();
+  lcd.setCursor(1, 0);
+  lcd.print("!!!WARNING!!!");
+  lcd.setCursor(1, 1);
+  lcd.print("REMOVE OBJECT");
+ 
+}
 
 //MAIN
 void loop() {
@@ -208,11 +247,28 @@ void loop() {
   }
 
   if(newResponse){
-    int distance = calculateDistance();
-    updateWarningLED(distance);
+    //Reseting flag
     newResponse = false;
-    if(checkToPrintToLCD()){
-      printToLCD(distance);
+
+    if(PROGRAM_LOCKED){
+      updateWarningLED(LOCK_UP_THRESHOLD);
+      if(checkToPrintToLCD()){
+        printLockUpWarning();
+      }
+
+      if(digitalRead(RESET_PIN) == HIGH){
+        unlockProgram();
+        lcd.clear();
+      }
+
+    } else {
+      int distance = calculateDistance();
+
+      updateWarningLED(distance);
+      
+      if(checkToPrintToLCD()){
+        printToLCD(distance);
+      } 
     }    
   }
 
